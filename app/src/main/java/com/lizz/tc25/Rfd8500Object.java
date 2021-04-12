@@ -14,6 +14,7 @@ import com.zebra.rfid.api3.Events;
 import com.zebra.rfid.api3.HANDHELD_TRIGGER_EVENT_TYPE;
 import com.zebra.rfid.api3.INVENTORY_STATE;
 import com.zebra.rfid.api3.InvalidUsageException;
+import com.zebra.rfid.api3.MEMORY_BANK;
 import com.zebra.rfid.api3.OperationFailureException;
 import com.zebra.rfid.api3.RFIDReader;
 import com.zebra.rfid.api3.ReaderDevice;
@@ -26,6 +27,7 @@ import com.zebra.rfid.api3.SL_FLAG;
 import com.zebra.rfid.api3.START_TRIGGER_TYPE;
 import com.zebra.rfid.api3.STATUS_EVENT_TYPE;
 import com.zebra.rfid.api3.STOP_TRIGGER_TYPE;
+import com.zebra.rfid.api3.TagAccess;
 import com.zebra.rfid.api3.TagData;
 import com.zebra.rfid.api3.TriggerInfo;
 
@@ -41,7 +43,8 @@ public class Rfd8500Object implements RfidEventsListener {
     private Handler mHandler;
 
     private static Readers readers = null;
-    private static RFIDReader reader;
+    private static RFIDReader mConnectedReader;
+    private static Antennas.AntennaRfConfig antennaRfConfig;
 //    private static ReaderDevice readerDevice;
 
     String pairName = "";
@@ -50,6 +53,7 @@ public class Rfd8500Object implements RfidEventsListener {
     String tagId = "";
     String data = "";
 
+    boolean isManual = false;
 
     public Rfd8500Object(Context context, Handler handler) {
         this.context = context;
@@ -92,20 +96,21 @@ public class Rfd8500Object implements RfidEventsListener {
             for (ReaderDevice device : readerDevices) {
                 if (device.getName().equals(pairName)) {
 //                    readerDevice = device;
-                    reader = device.getRFIDReader();
+                    mConnectedReader = device.getRFIDReader();
                 }
             }
 
-            if (reader == null) throw new RuntimeException("请先配对RFD8500蓝牙读写器:" + pairName);
+            if (mConnectedReader == null)
+                throw new RuntimeException("请先配对RFD8500蓝牙读写器:" + pairName);
 
             try {
-                reader.connect();
+                mConnectedReader.connect();
             } catch (OperationFailureException e) {
                 e.printStackTrace();
                 throw new RuntimeException("请检查读写器电源是否打开" + e.getResults().toString());
             }
 
-            if (!reader.isConnected()) throw new RuntimeException("连接失败");
+            if (!mConnectedReader.isConnected()) throw new RuntimeException("连接失败");
 
             try {
                 ConfigureReader();
@@ -129,6 +134,38 @@ public class Rfd8500Object implements RfidEventsListener {
      */
     @JavascriptInterface
     public String read() {
+        try {
+            if (mConnectedReader == null || !mConnectedReader.isConnected())
+                throw new RuntimeException("读写器未连接");
+
+            this.isManual = true;
+
+            final TagAccess.ReadAccessParams readAccessParams = new TagAccess().new ReadAccessParams();
+            readAccessParams.setAccessPassword(0);
+            readAccessParams.setCount(16);
+            readAccessParams.setOffset(0);
+            readAccessParams.setMemoryBank(MEMORY_BANK.MEMORY_BANK_EPC);
+
+            setAccessProfile(true);
+
+            final TagData tagData = mConnectedReader.Actions.TagAccess.readWait(this.tagId, readAccessParams, null, true);
+
+            this.tagId = tagData.getTagID();
+            this.data = tagData.getMemoryBankData();
+
+        } catch (InvalidUsageException e) {
+            e.printStackTrace();
+            this.lastError = "请先扫描标签";
+        } catch (OperationFailureException e) {
+            e.printStackTrace();
+            this.lastError = "读写器配置失败:" + e.getVendorMessage() + e.getResults().toString();
+        } catch (Exception e) {
+            e.printStackTrace();
+            this.lastError = e.getMessage();
+        } finally {
+            this.isManual = false;
+        }
+
         return String.format(template, this.lastError, this.tagId, this.data);
     }
 
@@ -164,9 +201,9 @@ public class Rfd8500Object implements RfidEventsListener {
     public boolean disconnect() {
         Log.d(TAG, "disconnect ");
         try {
-            if (reader != null) {
-                reader.Events.removeEventsListener(this);
-                reader.disconnect();
+            if (mConnectedReader != null) {
+                mConnectedReader.Events.removeEventsListener(this);
+                mConnectedReader.disconnect();
             }
             return true;
         } catch (InvalidUsageException e) {
@@ -187,11 +224,11 @@ public class Rfd8500Object implements RfidEventsListener {
      * @return
      */
     public boolean reconnect() {
-        if (reader != null) {
-            Log.d(TAG, "connect " + reader.getHostName());
+        if (mConnectedReader != null) {
+            Log.d(TAG, "connect " + mConnectedReader.getHostName());
             try {
-                if (!reader.isConnected()) {
-                    reader.connect();
+                if (!mConnectedReader.isConnected()) {
+                    mConnectedReader.connect();
                     ConfigureReader();
                     return true;
                 }
@@ -212,7 +249,7 @@ public class Rfd8500Object implements RfidEventsListener {
         try {
             if (readers != null) {
                 Log.d(TAG, "dispose: ");
-                reader = null;
+                mConnectedReader = null;
                 readers.Dispose();
                 readers = null;
             }
@@ -222,41 +259,66 @@ public class Rfd8500Object implements RfidEventsListener {
     }
 
     void ConfigureReader() throws OperationFailureException {
-        if (reader != null && reader.isConnected()) {
+        if (mConnectedReader != null && mConnectedReader.isConnected()) {
             TriggerInfo triggerInfo = new TriggerInfo();
             triggerInfo.StartTrigger.setTriggerType(START_TRIGGER_TYPE.START_TRIGGER_TYPE_IMMEDIATE);
             triggerInfo.StopTrigger.setTriggerType(STOP_TRIGGER_TYPE.STOP_TRIGGER_TYPE_IMMEDIATE);
             try {
                 // receive events from reader
-                reader.Events.addEventsListener(this);
+                mConnectedReader.Events.addEventsListener(this);
                 // HH event
-                reader.Events.setHandheldEvent(true);
+                mConnectedReader.Events.setHandheldEvent(true);
                 // tag event with tag data
-                reader.Events.setTagReadEvent(true);
-                reader.Events.setAttachTagDataWithReadEvent(true);
+                mConnectedReader.Events.setTagReadEvent(true);
+                mConnectedReader.Events.setAttachTagDataWithReadEvent(true);
                 // set trigger mode as rfid so scanner beam will not come
-                reader.Config.setTriggerMode(ENUM_TRIGGER_MODE.RFID_MODE, true);
+                mConnectedReader.Config.setTriggerMode(ENUM_TRIGGER_MODE.RFID_MODE, true);
                 // set start and stop triggers
-                reader.Config.setStartTrigger(triggerInfo.StartTrigger);
-                reader.Config.setStopTrigger(triggerInfo.StopTrigger);
+                mConnectedReader.Config.setStartTrigger(triggerInfo.StartTrigger);
+                mConnectedReader.Config.setStopTrigger(triggerInfo.StopTrigger);
                 // power levels are index based so maximum power supported get the last one
-                int MAX_POWER = reader.ReaderCapabilities.getTransmitPowerLevelValues().length - 1;
+                int MAX_POWER = mConnectedReader.ReaderCapabilities.getTransmitPowerLevelValues().length - 1;
                 // set antenna configurations
-                Antennas.AntennaRfConfig config = reader.Config.Antennas.getAntennaRfConfig(1);
-                config.setTransmitPowerIndex(MAX_POWER);
-                config.setrfModeTableIndex(0);
-                config.setTari(0);
-                reader.Config.Antennas.setAntennaRfConfig(1, config);
+                antennaRfConfig = mConnectedReader.Config.Antennas.getAntennaRfConfig(1);
+                antennaRfConfig.setTransmitPowerIndex(MAX_POWER);
+                antennaRfConfig.setrfModeTableIndex(0);
+                antennaRfConfig.setTari(0);
+                mConnectedReader.Config.Antennas.setAntennaRfConfig(1, antennaRfConfig);
                 // Set the singulation control
-                Antennas.SingulationControl s1_singulationControl = reader.Config.Antennas.getSingulationControl(1);
+                Antennas.SingulationControl s1_singulationControl = mConnectedReader.Config.Antennas.getSingulationControl(1);
                 s1_singulationControl.setSession(SESSION.SESSION_S0);
                 s1_singulationControl.Action.setInventoryState(INVENTORY_STATE.INVENTORY_STATE_A);
                 s1_singulationControl.Action.setSLFlag(SL_FLAG.SL_ALL);
-                reader.Config.Antennas.setSingulationControl(1, s1_singulationControl);
+                mConnectedReader.Config.Antennas.setSingulationControl(1, s1_singulationControl);
                 // delete any prefilters
-                reader.Actions.PreFilters.deleteAll();
+                mConnectedReader.Actions.PreFilters.deleteAll();
 
             } catch (InvalidUsageException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+
+    public void setAccessProfile(boolean bSet) {
+        if (mConnectedReader != null && mConnectedReader.isConnected() && mConnectedReader.isCapabilitiesReceived() && !isManual) {
+            Antennas.AntennaRfConfig antennaRfConfigLocal;
+            try {
+                if (bSet && antennaRfConfig.getrfModeTableIndex() != 0) {
+                    antennaRfConfigLocal = antennaRfConfig;
+                    // use of default profile for access operation
+                    antennaRfConfigLocal.setrfModeTableIndex(0);
+                    mConnectedReader.Config.Antennas.setAntennaRfConfig(1, antennaRfConfigLocal);
+                    antennaRfConfig = antennaRfConfigLocal;
+                } else if (!bSet && antennaRfConfig.getrfModeTableIndex() != 0) {
+                    antennaRfConfigLocal = antennaRfConfig;
+                    antennaRfConfigLocal.setrfModeTableIndex(0);
+                    mConnectedReader.Config.Antennas.setAntennaRfConfig(1, antennaRfConfigLocal);
+                    antennaRfConfig = antennaRfConfigLocal;
+                }
+            } catch (InvalidUsageException e) {
+                e.printStackTrace();
+            } catch (OperationFailureException e) {
                 e.printStackTrace();
             }
         }
@@ -300,10 +362,14 @@ public class Rfd8500Object implements RfidEventsListener {
             if (rfidStatusEvents.StatusEventData.HandheldTriggerEventData.getHandheldEvent() == HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_PRESSED) {
                 this.lastError = "";
                 this.tagId = "";
-                performInventory();
+                if (!this.isManual) {
+                    performInventory();
+                }
             }
             if (rfidStatusEvents.StatusEventData.HandheldTriggerEventData.getHandheldEvent() == HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_RELEASED) {
-                stopInventory();
+                if (!this.isManual) {
+                    stopInventory();
+                }
             }
         }
     }
@@ -313,8 +379,9 @@ public class Rfd8500Object implements RfidEventsListener {
      */
     synchronized void performInventory() {
         try {
-            if (reader == null || !reader.isConnected()) throw new RuntimeException("读写器未连接");
-            reader.Actions.Inventory.perform();
+            if (mConnectedReader == null || !mConnectedReader.isConnected())
+                throw new RuntimeException("读写器未连接");
+            mConnectedReader.Actions.Inventory.perform();
         } catch (InvalidUsageException e) {
             e.printStackTrace();
             this.lastError = "读失败" + e.getInfo() + e.getVendorMessage() + e.getMessage();
@@ -332,8 +399,9 @@ public class Rfd8500Object implements RfidEventsListener {
      */
     synchronized void stopInventory() {
         try {
-            if (reader == null || !reader.isConnected()) throw new RuntimeException("读写器未连接");
-            reader.Actions.Inventory.stop();
+            if (mConnectedReader == null || !mConnectedReader.isConnected())
+                throw new RuntimeException("读写器未连接");
+            mConnectedReader.Actions.Inventory.stop();
         } catch (InvalidUsageException e) {
             e.printStackTrace();
             this.lastError = "读失败" + e.getInfo() + e.getVendorMessage() + e.getMessage();
