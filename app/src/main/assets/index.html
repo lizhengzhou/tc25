@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8"/>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
+    <meta http-equiv="Pragma" content="no-cache"/>
+    <meta http-equiv="Cache-Control" content="no-cache"/>
+    <meta http-equiv="Expires" content="0"/>
+    <meta
+            name="viewport"
+            content="initial-scale=1, maximum-scale=1, user-scalable=no, width=device-width"
+    />
+    <meta content="telephone=no" name="format-detection"/>
+
+    <script type="text/javascript">
+
+      function connect() {
+        if (!window.rfd8500) alert("RFD8500插件加载异常");
+        var sn = document.getElementById("SN").value;
+        log(sn);
+        var rete= rfd8500.connect(sn)
+        log(rete);
+        rfd8500.onStatus=function(data){
+            log(data);
+        }
+      }
+
+      function wrtite() {
+       if (!window.rfd8500) alert("RFD8500插件加载异常");
+      }
+
+
+      function log(msg) {
+        document.getElementById("msg").innerText += msg + "\r\n";
+      }
+
+    </script>
+</head>
+<body>
+<h1>hello</h1>
+
+<input type="text" id="SN" value="17056523020616"/>
+
+<br/>
+<input type="button" value="连接" id="bt_con" onclick="connect()"/>
+<br/>
+<input type="button" value="写入" id="bt_print" onclick="wrtite()"/>
+<br/>
+
+<span id="msg"></span>
+</body>
+</html>
