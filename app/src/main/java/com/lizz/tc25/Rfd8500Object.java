@@ -139,11 +139,11 @@ public class Rfd8500Object implements RfidEventsListener {
      * @return
      */
     @JavascriptInterface
-    public boolean write(String data) {
+    public String write(String data) {
         Log.d(TAG, "write: " + data);
 
 
-        return false;
+        return "";
     }
 
     /**
